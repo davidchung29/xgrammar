@@ -12,49 +12,37 @@
 
 namespace xgrammar {
 
-FSMWithStartEnd SuffixAutomata::Build(const std::vector<std::string>& chunks) {
+FSMWithStartEnd SuffixAutomata::Build(const std::vector<std::string>& chunks, bool unique_only) {
   // Step 1. Build the suffix automaton over the chunk sequence with the standard online
   // construction. Each chunk is treated as one symbol of the alphabet.
   struct State {
     int32_t length = 0;
     int32_t suffix_link = -1;
     std::map<std::string, int32_t> transitions;
+    int32_t occurrence_count = 0;
   };
 
   std::vector<State> states(1);
   int32_t last = 0;
   for (const std::string& chunk : chunks) {
-    int32_t current = static_cast<int32_t>(states.size());
-    states.push_back({states[last].length + 1, -1, {}});
-
-    int32_t parent = last;
-    while (parent != -1 && !states[parent].transitions.count(chunk)) {
-      states[parent].transitions[chunk] = current;
-      parent = states[parent].suffix_link;
-    }
-    if (parent == -1) {
-      states[current].suffix_link = 0;
-    } else {
-      int32_t target = states[parent].transitions.at(chunk);
-      if (states[parent].length + 1 == states[target].length) {
-        states[current].suffix_link = target;
-      } else {
-        int32_t clone = static_cast<int32_t>(states.size());
-        states.push_back(states[target]);
-        states[clone].length = states[parent].length + 1;
-        while (parent != -1) {
-          auto transition = states[parent].transitions.find(chunk);
-          if (transition == states[parent].transitions.end() || transition->second != target) {
-            break;
-          }
-          transition->second = clone;
-          parent = states[parent].suffix_link;
+    suffix_automata_detail::Extend(
+        &states,
+        &last,
+        chunk,
+        [](const State& state, const std::string& symbol) {
+          auto it = state.transitions.find(symbol);
+          return it == state.transitions.end() ? -1 : it->second;
+        },
+        [](State* state, const std::string& symbol, int32_t target) {
+          state->transitions[symbol] = target;
         }
-        states[target].suffix_link = clone;
-        states[current].suffix_link = clone;
-      }
-    }
-    last = current;
+    );
+  }
+
+  // Propagate terminal contributions through suffix links to obtain each state's end-position
+  // count. All substrings represented by one state have the same occurrence count.
+  if (unique_only) {
+    suffix_automata_detail::PropagateOccurrenceCounts(&states);
   }
 
   // Step 2. Expand the chunk-level automaton into a byte-level FSM. Automaton state i maps to
@@ -65,7 +53,9 @@ FSMWithStartEnd SuffixAutomata::Build(const std::vector<std::string>& chunks) {
   std::vector<int32_t> end_states;
   end_states.reserve(states.size());
   for (int32_t index = 0; index < static_cast<int32_t>(states.size()); ++index) {
-    end_states.push_back(index);
+    if (!unique_only || (index != 0 && states[index].occurrence_count == 1)) {
+      end_states.push_back(index);
+    }
   }
   for (int32_t index = 0; index < static_cast<int32_t>(states.size()); ++index) {
     for (const auto& [chunk, target] : states[index].transitions) {

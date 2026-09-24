@@ -1337,8 +1337,19 @@ int32_t EBNFParser::ParseSubstringMacro() {
   auto args = ParseMacroArguments();
   auto delta_element = start - current_token_;
 
-  if (!args.named_arguments.empty()) {
-    ReportParseError("Substring() does not accept named arguments", delta_element);
+  for (const auto& [name, _] : args.named_arguments) {
+    if (name != "unique") {
+      ReportParseError("Substring() does not support the named argument " + name, delta_element);
+    }
+  }
+
+  bool unique_only = false;
+  if (auto it = args.named_arguments.find("unique"); it != args.named_arguments.end()) {
+    auto bool_node = std::get_if<MacroIR::BooleanNode>(it->second.get());
+    if (bool_node == nullptr) {
+      ReportParseError("Substring unique must be a boolean", delta_element);
+    }
+    unique_only = bool_node->value;
   }
 
   std::vector<std::string> chunks;
@@ -1348,10 +1359,17 @@ int32_t EBNFParser::ParseSubstringMacro() {
     if (string_node == nullptr) {
       ReportParseError("Substring() arguments must be strings", delta_element);
     }
+    if (unique_only && string_node->value.empty()) {
+      ReportParseError("Substring(unique=true) does not support empty chunks", delta_element);
+    }
     chunks.push_back(string_node->value);
   }
 
-  return builder_.AddSubstring(chunks);
+  if (unique_only && chunks.empty()) {
+    ReportParseError("Substring(unique=true) requires at least one chunk", delta_element);
+  }
+
+  return builder_.AddSubstring(chunks, unique_only);
 }
 
 int32_t EBNFParser::ParseTokenSet() {

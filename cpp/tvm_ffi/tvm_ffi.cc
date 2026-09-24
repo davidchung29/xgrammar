@@ -262,6 +262,19 @@ class GrammarMatcherObj : public ffi::Object {
   );
 };
 
+class UniqueSubstringMatcherObj : public ffi::Object {
+ public:
+  UniqueSubstringMatcher value;
+
+  UniqueSubstringMatcherObj(ffi::Bytes source, ffi::ObjectRef tokenizer_ref)
+      : value(BytesToString(source), tokenizer_ref.as<TokenizerInfoObj>()->value) {}
+
+  static constexpr bool _type_mutable = true;
+  TVM_FFI_DECLARE_OBJECT_INFO_FINAL(
+      "xgrammar.tvm_ffi_binding.UniqueSubstringMatcher", UniqueSubstringMatcherObj, ffi::Object
+  );
+};
+
 class BatchGrammarMatcherObj : public ffi::Object {
  public:
   BatchGrammarMatcher value;
@@ -374,6 +387,14 @@ TVM_FFI_STATIC_INIT_BLOCK() {
             return ffi::ObjectRef(
                 ffi::make_object<GrammarObj>(Grammar::FromEBNF(ebnf_str, root_rule_name))
             );
+          }
+      )
+      .def_static(
+          "from_substring",
+          [](ffi::Bytes source, bool unique_only) {
+            return ffi::ObjectRef(ffi::make_object<GrammarObj>(
+                Grammar::FromSubstring(BytesToString(source), unique_only)
+            ));
           }
       )
       .def_static(
@@ -796,6 +817,67 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       )
       .def("_debug_print_internal_state", [](const GrammarMatcherObj* o) {
         return ffi::String(o->value._DebugPrintInternalState());
+      });
+
+  // Runtime-bound matcher for a unique substring of transient source bytes.
+  refl::ObjectDef<UniqueSubstringMatcherObj>()
+      .def(refl::init<ffi::Bytes, O>())
+      .def(
+          "accept_token",
+          [](UniqueSubstringMatcherObj* o, int64_t token_id) {
+            return o->value.AcceptToken(static_cast<int32_t>(token_id));
+          }
+      )
+      .def(
+          "accept_string",
+          [](UniqueSubstringMatcherObj* o, ffi::Any input_bytes_union) {
+            ffi::AnyView view = input_bytes_union;
+            if (view.as<ffi::Bytes>()) {
+              return o->value.AcceptString(BytesToString(view.cast<ffi::Bytes>()));
+            }
+            if (view.as<ffi::String>()) {
+              return o->value.AcceptString(view.cast<ffi::String>());
+            }
+            TVM_FFI_THROW(RuntimeError) << "Unsupported type in accept_string";
+            XGRAMMAR_UNREACHABLE();
+          }
+      )
+      .def(
+          "fill_next_token_bitmask",
+          [](UniqueSubstringMatcherObj* o, ffi::AnyView token_bitmask, int64_t index) {
+            return o->value.FillNextTokenBitmask(
+                token_bitmask.cast<DLTensor*>(), static_cast<int>(index)
+            );
+          }
+      )
+      .def(
+          "rollback",
+          [](UniqueSubstringMatcherObj* o, int64_t num_tokens) {
+            o->value.Rollback(static_cast<int>(num_tokens));
+          }
+      )
+      .def("reset", [](UniqueSubstringMatcherObj* o) { o->value.Reset(); })
+      .def(
+          "is_completed", [](const UniqueSubstringMatcherObj* o) { return o->value.IsCompleted(); }
+      )
+      .def(
+          "is_terminated",
+          [](const UniqueSubstringMatcherObj* o) { return o->value.IsTerminated(); }
+      )
+      .def(
+          "occurrence_count",
+          [](const UniqueSubstringMatcherObj* o) {
+            return static_cast<int64_t>(o->value.OccurrenceCount());
+          }
+      )
+      .def(
+          "num_index_states",
+          [](const UniqueSubstringMatcherObj* o) {
+            return static_cast<int64_t>(o->value.NumIndexStates());
+          }
+      )
+      .def("memory_size_bytes", [](const UniqueSubstringMatcherObj* o) {
+        return static_cast<int64_t>(o->value.MemorySizeBytes());
       });
 
   // ----- Global functions: testing, kernels, config, exceptions -----

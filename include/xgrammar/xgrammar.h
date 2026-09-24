@@ -13,5 +13,6 @@
 #include <xgrammar/grammar.h>
 #include <xgrammar/matcher.h>
 #include <xgrammar/tokenizer_info.h>
+#include <xgrammar/unique_substring.h>
 
 #endif  // XGRAMMAR_XGRAMMAR_H_

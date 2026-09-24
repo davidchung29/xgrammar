@@ -227,6 +227,12 @@ std::string GrammarPrinter::PrintSubstring(const GrammarExpr& grammar_expr) {
     }
     result += escape_chunk(chunks[i]);
   }
+  if (grammar_->GetSubstringUniqueOnly(grammar_expr)) {
+    if (!chunks.empty()) {
+      result += ", ";
+    }
+    result += "unique=true";
+  }
   return result + ")";
 }
 

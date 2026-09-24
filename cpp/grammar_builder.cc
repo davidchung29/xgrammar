@@ -99,8 +99,11 @@ int32_t GrammarBuilder::AddRegex(const std::string& regex_str, bool json_string)
   return AddGrammarExpr({GrammarExprType::kRegex, data.data(), static_cast<int32_t>(data.size())});
 }
 
-int32_t GrammarBuilder::AddSubstring(const std::vector<std::string>& chunks) {
+int32_t GrammarBuilder::AddSubstring(const std::vector<std::string>& chunks, bool unique_only) {
   std::vector<int32_t> data;
+  if (unique_only) {
+    data.push_back(Grammar::Impl::kSubstringUniqueOnlyMarker);
+  }
   for (const std::string& chunk : chunks) {
     data.push_back(static_cast<int32_t>(chunk.size()));
     for (char c : chunk) {

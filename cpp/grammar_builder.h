@@ -97,9 +97,11 @@ class GrammarBuilder {
    * \brief Add a GrammarExpr for a substring expression, which matches every contiguous
    * subsequence of the chunk list (including the empty one). The chunks are stored as-is and
    * compiled into an automaton by GrammarFSMBuilder.
-   * \param chunks The list of byte string chunks. Chunks may be empty or repeated.
+   * \param chunks The list of byte string chunks. Chunks may be repeated. Empty chunks are not
+   * supported when unique_only is true.
+   * \param unique_only Whether to accept only non-empty subsequences occurring exactly once.
    */
-  int32_t AddSubstring(const std::vector<std::string>& chunks);
+  int32_t AddSubstring(const std::vector<std::string>& chunks, bool unique_only = false);
 
   /*!
    * \brief Add a GrammarExpr for a character class.

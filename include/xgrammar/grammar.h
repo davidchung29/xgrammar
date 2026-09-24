@@ -100,6 +100,14 @@ class Grammar {
   );
 
   /*!
+   * \brief Construct a grammar over every byte substring of runtime-provided source text.
+   * \param source The source bytes, split into one-byte chunks.
+   * \param unique_only If true, accept only non-empty substrings occurring exactly once.
+   * Occurrences may overlap.
+   */
+  static Grammar FromSubstring(const std::string& source, bool unique_only = false);
+
+  /*!
    * \brief Construct a BNF grammar from the json schema string. The schema string should be in the
    * format of the schema of a JSON file. We will parse the schema and generate a BNF grammar.
    * \param schema The schema string.

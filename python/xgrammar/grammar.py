@@ -198,6 +198,19 @@ class Grammar(XGRObject):
         return Grammar._create_from_handle(_core.Grammar.from_ebnf(ebnf_string, root_rule_name))
 
     @staticmethod
+    def from_substring(source: Union[str, bytes], *, unique: bool = False) -> "Grammar":
+        """Construct a grammar over byte substrings of ``source``.
+
+        With ``unique=True``, the grammar accepts only non-empty substrings with exactly one
+        overlapping occurrence. The source is passed directly to C++ without generating EBNF.
+        """
+        if not isinstance(source, (str, bytes)):
+            raise TypeError("source must be str or bytes")
+        if isinstance(source, str):
+            source = source.encode("utf-8")
+        return Grammar._create_from_handle(_core.Grammar.from_substring(source, unique))
+
+    @staticmethod
     def from_json_schema(
         schema: Union[str, Type[BaseModel], Dict[str, Any]],
         *,

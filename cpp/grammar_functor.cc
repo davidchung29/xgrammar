@@ -1182,8 +1182,11 @@ class AllowEmptyRuleAnalyzerImpl : public GrammarVisitor<std::vector<int32_t>> {
       }
 
       if (grammar_expr.type == GrammarExprType::kSubstring) {
-        // A substring automaton always accepts the empty string: every state is accepting.
-        empty_rule_id_set->insert(i);
+        // Ordinary substring automata accept the empty string. Unique-only substring automata
+        // require a non-empty match that occurs exactly once.
+        if (!base_grammar_->GetSubstringUniqueOnly(grammar_expr)) {
+          empty_rule_id_set->insert(i);
+        }
         continue;
       }
 
@@ -1392,7 +1395,10 @@ class GrammarFSMBuilderImpl {
       const std::string& regex, bool json_string, int start_state, std::vector<int32_t>* end_states
   );
   void BuildSubstring(
-      const std::vector<std::string>& chunks, int start_state, std::vector<int32_t>* end_states
+      const std::vector<std::string>& chunks,
+      bool unique_only,
+      int start_state,
+      std::vector<int32_t>* end_states
   );
   void BuildTagDispatch(
       const Grammar::Impl::TagDispatch& tag_dispatch,
@@ -1637,7 +1643,12 @@ void GrammarFSMBuilderImpl::BuildExpression(
           end_states
       );
     case ExprType::kSubstring:
-      return BuildSubstring(grammar->GetSubstringChunks(expr), start_state, end_states);
+      return BuildSubstring(
+          grammar->GetSubstringChunks(expr),
+          grammar->GetSubstringUniqueOnly(expr),
+          start_state,
+          end_states
+      );
     case ExprType::kTagDispatch:
       return BuildTagDispatch(grammar->GetTagDispatch(expr), start_state, end_states);
     case ExprType::kTokenTagDispatch:
@@ -1853,9 +1864,12 @@ void GrammarFSMBuilderImpl::BuildRegex(
 }
 
 void GrammarFSMBuilderImpl::BuildSubstring(
-    const std::vector<std::string>& chunks, int start_state, std::vector<int32_t>* end_states
+    const std::vector<std::string>& chunks,
+    bool unique_only,
+    int start_state,
+    std::vector<int32_t>* end_states
 ) {
-  AppendFSM(SuffixAutomata::Build(chunks), start_state, end_states);
+  AppendFSM(SuffixAutomata::Build(chunks, unique_only), start_state, end_states);
 }
 
 void GrammarFSMBuilderImpl::BuildTagDispatch(

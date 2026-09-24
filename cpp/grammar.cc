@@ -9,7 +9,9 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
+#include "grammar_builder.h"
 #include "grammar_functor.h"
 #include "grammar_parser.h"
 #include "grammar_printer.h"
@@ -44,6 +46,16 @@ Grammar Grammar::FromEBNF(const std::string& ebnf_string, const std::string& roo
   auto grammar = ParseEBNF(ebnf_string, root_rule_name);
   grammar = GrammarNormalizer().Apply(grammar);
   return grammar;
+}
+
+Grammar Grammar::FromSubstring(const std::string& source, bool unique_only) {
+  XGRAMMAR_CHECK(!unique_only || !source.empty()) << "A unique substring source must not be empty";
+  std::vector<std::string> chunks;
+  chunks.reserve(source.size());
+  for (char byte : source) chunks.emplace_back(1, byte);
+  GrammarBuilder builder;
+  builder.AddRule("root", builder.AddSubstring(chunks, unique_only));
+  return builder.Get("root");
 }
 
 Grammar Grammar::FromJSONSchema(
@@ -265,11 +277,15 @@ std::optional<std::string> Grammar::Impl::Validate() const {
         ok = size >= 1;
         break;
       case GrammarExprType::kSubstring:
-        // [chunk0_len, byte0_0, ..., chunk1_len, ...]
-        for (int64_t i = 0; ok && i < size;) {
-          const int64_t chunk_len = expr[i++];
-          ok = chunk_len >= 0 && i + chunk_len <= size;
-          i += chunk_len;
+        // [chunk0_len, byte0_0, ..., chunk1_len, ...], optionally prefixed by -1 for unique-only.
+        {
+          const bool unique_only = size > 0 && expr[0] == Grammar::Impl::kSubstringUniqueOnlyMarker;
+          ok = !unique_only || size > 1;
+          for (int64_t i = unique_only ? 1 : 0; ok && i < size;) {
+            const int64_t chunk_len = expr[i++];
+            ok = chunk_len >= (unique_only ? 1 : 0) && i + chunk_len <= size;
+            i += chunk_len;
+          }
         }
         break;
     }

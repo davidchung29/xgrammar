@@ -23,6 +23,7 @@ from .grammar import Grammar, StructuralTagItem
 from .matcher import (
     BatchGrammarMatcher,
     GrammarMatcher,
+    UniqueSubstringMatcher,
     allocate_token_bitmask,
     apply_token_bitmask_inplace,
     bitmask_dtype,
@@ -51,6 +52,7 @@ __all__ = [
     "StructuralTagItem",
     "BatchGrammarMatcher",
     "GrammarMatcher",
+    "UniqueSubstringMatcher",
     "allocate_token_bitmask",
     "apply_token_bitmask_inplace",
     "bitmask_dtype",

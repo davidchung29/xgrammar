@@ -11,6 +11,7 @@ from numpy.typing import ArrayLike
 
 from .base import XGRObject, _core
 from .compiler import CompiledGrammar
+from .tokenizer_info import TokenizerInfo
 
 bitmask_dtype = torch.int32
 """The dtype of the bitmask: int32."""
@@ -715,3 +716,69 @@ class BatchGrammarMatcher(XGRObject):
 
         matcher_handles = [matcher._handle for matcher in matchers]
         _core.BatchGrammarMatcher.batch_rollback(matcher_handles, num_tokens)
+
+
+class UniqueSubstringMatcher(XGRObject):
+    """Constrain output to a non-empty substring occurring exactly once in source bytes.
+
+    This experimental matcher binds transient data directly instead of compiling it into a
+    surrounding grammar. It is useful for prototyping coding-agent fields such as ``old_str``.
+    Token bytes are decoded as JSON string content before matching the source, including escape
+    sequences split across tokens. A tokenizer stop token may be accepted only after the decoded
+    substring has exactly one overlapping occurrence and no escape is incomplete.
+    """
+
+    def __init__(self, source: Union[str, bytes], tokenizer_info: TokenizerInfo) -> None:
+        """Build a runtime suffix index for ``source`` and bind it to ``tokenizer_info``."""
+        if not isinstance(source, (str, bytes)):
+            raise TypeError("source must be str or bytes")
+        if not isinstance(tokenizer_info, TokenizerInfo):
+            raise TypeError("tokenizer_info must be a TokenizerInfo")
+        if isinstance(source, str):
+            source = source.encode("utf-8")
+        self._init_handle(_core.UniqueSubstringMatcher(source, tokenizer_info._handle))
+
+    def accept_token(self, token_id: int) -> bool:
+        """Accept one tokenizer token, or a stop token when the substring is unique."""
+        return bool(self._handle.accept_token(token_id))
+
+    def accept_string(self, input_str: Union[str, bytes]) -> bool:
+        """Accept JSON-encoded string-content bytes as one rollback step."""
+        return bool(self._handle.accept_string(input_str))
+
+    def fill_next_token_bitmask(self, bitmask: ArrayLike, index: int = 0) -> bool:
+        """Fill a token bitmask from the current suffix-index state."""
+        return bool(self._handle.fill_next_token_bitmask(bitmask, index))
+
+    def rollback(self, num_tokens: int = 1) -> None:
+        """Roll back accepted token or string steps."""
+        self._handle.rollback(num_tokens)
+
+    def reset(self) -> None:
+        """Reset to the empty prefix while retaining the bound index and bounded mask cache."""
+        self._handle.reset()
+
+    @property
+    def is_completed(self) -> bool:
+        """Whether the current non-empty substring occurs exactly once."""
+        return bool(self._handle.is_completed())
+
+    @property
+    def is_terminated(self) -> bool:
+        """Whether a stop token has been accepted."""
+        return bool(self._handle.is_terminated())
+
+    @property
+    def occurrence_count(self) -> int:
+        """Number of overlapping occurrences of the current substring."""
+        return int(self._handle.occurrence_count())
+
+    @property
+    def num_index_states(self) -> int:
+        """Number of states in the runtime suffix index."""
+        return int(self._handle.num_index_states())
+
+    @property
+    def memory_size_bytes(self) -> int:
+        """Approximate native memory used by the index and realized mask cache."""
+        return int(self._handle.memory_size_bytes())
