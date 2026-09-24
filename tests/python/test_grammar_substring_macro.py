@@ -33,6 +33,50 @@ def test_substring_macro_normalization():
     assert str(grammar) == 'root ::= (("x" root_1 "y"))\nroot_1 ::= Substring("abc")\n'
 
 
+def test_unique_substring_parse_print_and_serialization():
+    grammar = xgr.Grammar.from_ebnf('root ::= Substring("b", "a", "n", "a", "n", "a", unique=true)')
+    expected = 'root ::= Substring("b", "a", "n", "a", "n", "a", unique=true)\n'
+    assert str(grammar) == expected
+    assert str(xgr.Grammar.from_ebnf(str(grammar))) == expected
+    assert str(xgr.Grammar.deserialize_json(grammar.serialize_json())) == expected
+
+
+def test_unique_substring_direct_source_constructor():
+    grammar = xgr.Grammar.from_substring(b"banana", unique=True)
+    assert _is_grammar_accept_string(grammar, "nan")
+    assert not _is_grammar_accept_string(grammar, "na")
+    assert not _is_grammar_accept_string(grammar, "")
+
+
+def _overlapping_occurrences(haystack: str, needle: str) -> int:
+    if not needle:
+        return len(haystack) + 1
+    return sum(haystack.startswith(needle, index) for index in range(len(haystack)))
+
+
+@pytest.mark.parametrize("contents", ["banana", "aaaa", "abcabx"])
+def test_unique_substring_language_matches_overlapping_reference(contents: str):
+    chunks = ", ".join(f'"{char}"' for char in contents)
+    grammar = xgr.Grammar.from_ebnf(f"root ::= Substring({chunks}, unique=true)")
+    alphabet = sorted(set(contents) | {"x"})
+    for length in range(len(contents) + 2):
+        for candidate_tuple in itertools.product(alphabet, repeat=length):
+            candidate = "".join(candidate_tuple)
+            expected = bool(candidate) and _overlapping_occurrences(contents, candidate) == 1
+            assert _is_grammar_accept_string(grammar, candidate) == expected, (contents, candidate)
+
+
+def test_unique_substring_can_continue_before_becoming_unique():
+    grammar = xgr.Grammar.from_ebnf(
+        'root ::= "<" s ">"\n' 's ::= Substring("a", "a", "a", "a", unique=true)'
+    )
+    assert not _is_grammar_accept_string(grammar, "<a>")
+    assert not _is_grammar_accept_string(grammar, "<aa>")
+    assert not _is_grammar_accept_string(grammar, "<aaa>")
+    assert _is_grammar_accept_string(grammar, "<aaaa>")
+    assert not _is_grammar_accept_string(grammar, "<aaaaa>")
+
+
 ebnf_str__input_str__accepted__test_substring_macro_accept_string = [
     # Contiguous chunk subsequences, including the empty one
     ('root ::= Substring("abc", "de", "fg")', "", True),
@@ -239,10 +283,33 @@ def test_substring_macro_bitmask_matches_string_acceptance():
     assert matcher.is_terminated()
 
 
+def test_unique_substring_bitmask_matches_string_acceptance():
+    grammar_str = 'root ::= "<" s ">"\n' 's ::= Substring("a", "a", "a", "a", unique=true)'
+    vocab = ["a", "aa", "aaa", "aaaa", ">", "a>", "aa>", "x", "<"]
+    tokenizer_info = xgr.TokenizerInfo(vocab)
+    compiler = xgr.GrammarCompiler(tokenizer_info, cache_enabled=False)
+    compiled = compiler.compile_grammar(grammar_str)
+    matcher = xgr.GrammarMatcher(compiled, terminate_without_stop_token=True)
+    bitmask = xgr.allocate_token_bitmask(1, tokenizer_info.vocab_size)
+
+    assert matcher.accept_string("<")
+    for consumed in ["", "a", "aa", "aaa", "aaaa"]:
+        matcher.fill_next_token_bitmask(bitmask)
+        rejected = set(_get_masked_tokens_from_bitmask(bitmask, tokenizer_info.vocab_size))
+        for token_id, piece in enumerate(vocab):
+            fork = matcher.fork()
+            assert fork.accept_string(piece) == (token_id not in rejected), (consumed, piece)
+        if consumed != "aaaa":
+            assert matcher.accept_string("a")
+
+
 ebnf_str__expected_error_regex__test_substring_macro_parser_errors = [
-    ('root ::= Substring("a", foo=true)', "Substring\\(\\) does not accept named arguments"),
+    ('root ::= Substring("a", foo=true)', "does not support the named argument foo"),
     ("root ::= Substring(abc)", "Substring\\(\\) arguments must be strings"),
     ('root ::= Substring("a", 1)', "Substring\\(\\) arguments must be strings"),
+    ('root ::= Substring("a", unique="yes")', "Substring unique must be a boolean"),
+    ("root ::= Substring(unique=true)", "requires at least one chunk"),
+    ('root ::= Substring("", unique=true)', "does not support empty chunks"),
 ]
 
 
