@@ -181,5 +181,54 @@ allowed a valid continuation. `reproduce_adaptive_mask_mismatch.py` preserves th
 reproduction. Adaptive timing claims should be limited to workloads whose complete mask
 traces agree between configurations.
 
+## Runtime unique-substring prototype
+
+`profile_unique_substring.py` evaluates the proposed `old_str` constraint for a coding
+agent's search-and-replace tool:
+
+```sh
+PYTHONPATH=python .venv-native/bin/python \
+  examples/benchmark/profile_unique_substring.py \
+  --output profiling-results/unique-substring \
+  --warmups 5 --iterations 50 --rounds 3
+```
+
+The synthetic data contains unique-heavy and repetitive code-like files at 10 KiB,
+100 KiB, and 1 MiB. Each file has a unique marker used as the valid completion, a repeated
+substring that must not be allowed to finish, and a missing substring that must be
+rejected. The harness checks overlapping occurrence counts and samples token masks against
+a direct search reference outside timed regions. It uses the saved GPT-2 tokenizer with
+50,257 tokens, one CPU thread, and no LLM or GPU.
+
+The timed markers use JSON-safe ASCII so the runtime and static baselines consume identical
+token bytes. Separate correctness tests cover JSON escapes, including escapes split across tokens.
+
+The runtime matcher builds a suffix automaton directly from file bytes. It permits a token
+while the extended prefix occurs at least once and permits EOS only when the non-empty
+prefix occurs exactly once. Its mask for each visited automaton state is computed lazily.
+`runtime-cold` rebuilds the index and masks for each call; `runtime-warm` resets decode state
+while retaining the bound index and realized masks. The static baseline constructs and
+compiles an equivalent `Grammar.from_substring(..., unique=True)` on every iteration. Static
+compilation is limited to 10 KiB because embedding larger transient files in compiled grammar
+state is the scaling issue under test. Post-hoc search is recorded for context but cannot
+prevent an invalid tool call and is not an equivalent baseline.
+
+EOS represents the harness decision to close `old_str`. The prototype exposes the runtime
+constraint as a dedicated matcher; it does not yet splice that matcher into an arbitrary
+`GrammarMatcher` or handle one token that crosses from `old_str` into the remaining JSON.
+
+On the Apple M2 profiling machine, the 10 KiB runtime index took 0.697–0.802 ms to build,
+compared with 130.572–164.981 ms for static grammar construction and compilation, a
+163–237× setup speedup. At 1 MiB, cold runtime setup took 111.307–137.152 ms and used about
+92 MiB for 1.19–1.57 million index states. Cold lazy mask generation cost
+629.609–653.340 µs per token across the six workloads; after index and state-mask reuse it
+cost 1.004–1.217 µs per token. These are constraint-only CPU measurements, not end-to-end
+LLM speedups.
+
+Every workload and configuration ran five warmups followed by fifty timed repetitions in
+each of three rounds. The harness stores setup time, every per-token mask and acceptance
+time, total wall and CPU time, index or compiled memory, process telemetry, exact source
+files and hashes, tokenizer files, source diff, correctness checks, and all raw iterations.
+
 References: [XGrammar 1 §4.3](https://arxiv.org/html/2411.15100v3#S4.SS3) and
 [XGrammar 2 §4.1/§4.4](https://arxiv.org/html/2601.04426v4#S4).
