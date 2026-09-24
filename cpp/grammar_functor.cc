@@ -2340,6 +2340,13 @@ int32_t RepetitionRangeExpanderImpl::ExpandRepetitionRange(
   XGRAMMAR_CHECK(lower >= 0 && (upper == -1 || upper >= lower))
       << "Invalid repetition range {" << lower << ", " << upper << "}";
 
+#if defined(XGRAMMAR_PROFILE_DISABLE_REPETITION_COMPRESSION) && \
+    XGRAMMAR_PROFILE_DISABLE_REPETITION_COMPRESSION
+  // Keep memoization and all other grammar optimizations unchanged. Only replace
+  // compressed repetition states with the existing equivalent explicit expansion.
+  return LegacyHandleRepetitionRange(cur_rule_name, grammar_expr_id, lower, upper);
+#endif
+
   // Case 1.1 small upper (<=threshold), unzip the repetition.
   // Case 1.2 unbounded upper, and lower is also small (<=threshold), unzip the lower part.
   if ((upper != -1 && upper <= kUnzipThreshold) || (upper == -1 && lower <= kUnzipThreshold)) {

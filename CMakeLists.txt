@@ -79,6 +79,18 @@ file(GLOB_RECURSE XGRAMMAR_SOURCES_PATH CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}
 list(FILTER XGRAMMAR_SOURCES_PATH EXCLUDE REGEX "/cpp/tvm_ffi/.*\\.cc$")
 
 add_library(xgrammar STATIC ${XGRAMMAR_SOURCES_PATH})
+
+# Benchmark-only ablation; default preserves production behavior.
+option(XGRAMMAR_PROFILE_DISABLE_REPETITION_COMPRESSION
+       "Expand repetitions explicitly for profiling" OFF)
+if(XGRAMMAR_PROFILE_DISABLE_REPETITION_COMPRESSION)
+  target_compile_definitions(xgrammar PRIVATE XGRAMMAR_PROFILE_DISABLE_REPETITION_COMPRESSION=1)
+endif()
+# Benchmark-only full-vocabulary runtime baseline for ordinary CFG workloads.
+option(XGRAMMAR_PROFILE_FULL_VOCAB_MASK "Profile masks by simulating every vocabulary token" OFF)
+if(XGRAMMAR_PROFILE_FULL_VOCAB_MASK)
+  target_compile_definitions(xgrammar PRIVATE XGRAMMAR_PROFILE_FULL_VOCAB_MASK=1)
+endif()
 target_include_directories(xgrammar PUBLIC include)
 target_include_directories(xgrammar SYSTEM PUBLIC ${XGRAMMAR_INCLUDE_PATH})
 

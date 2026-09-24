@@ -291,3 +291,12 @@ python/xgrammar/tvm_ffi_binding/
 
 # Generated package version
 python/xgrammar/_version.py
+
+# Local native profiling environment
+.venv-native/
+
+# Isolated profiling wheels and installed packages
+/profiling-builds/
+
+# Generated profiling outputs. Authoritative summaries may be force-added for publication.
+/profiling-results/

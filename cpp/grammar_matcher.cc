@@ -1690,6 +1690,35 @@ bool GrammarMatcher::Impl::FillNextTokenBitmask(
   int32_t* bitmask_data_ptr =
       CheckAndGetBitmaskPtr(*next_token_bitmask, tokenizer_info_.GetVocabSize(), index);
   current_token_index_ = static_cast<int32_t>(token_length_history.size());
+#if defined(XGRAMMAR_PROFILE_FULL_VOCAB_MASK) && XGRAMMAR_PROFILE_FULL_VOCAB_MASK
+  // Benchmark-only baseline for ordinary CFGs. Native token simulation avoids a
+  // Python call per candidate. Keep compiler/parser optimizations unchanged and
+  // bypass adaptive-mask lookups. Copy once so speculation cannot alter this matcher.
+  XGRAMMAR_CHECK(!has_budget_rules_ && !has_char_budget_rules_ && !capture_tracking_ &&
+                 !has_token_edges_)
+      << "Full-vocabulary profiling only supports ordinary CFGs without budgets, captures, "
+         "or token edges";
+  DynamicBitset full_vocab_mask(
+      tokenizer_info_.GetVocabSize(), reinterpret_cast<uint32_t*>(bitmask_data_ptr)
+  );
+  full_vocab_mask.Reset();
+  Impl trial(*this);
+  for (const auto& entry : tokenizer_info_.GetSortedDecodedVocab()) {
+    const int32_t token_id = entry.first;
+    if (std::find(stop_token_ids_.begin(), stop_token_ids_.end(), token_id) !=
+        stop_token_ids_.end()) {
+      continue;
+    }
+    if (trial.AcceptToken(token_id, false)) {
+      full_vocab_mask.Set(token_id, true);
+      trial.Rollback(1);
+    }
+  }
+  for (int32_t token_id : stop_token_ids_) {
+    full_vocab_mask.Set(token_id, IsCompleted());
+  }
+  return !IsTokenBitmaskAllTrue(bitmask_data_ptr);
+#endif
   if (has_budget_rules_) {
     const auto& row = scanable_state_history_[scanable_state_history_.size() - 1];
     bool any_expired = false;
