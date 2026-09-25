@@ -202,6 +202,9 @@ a direct search reference outside timed regions. It uses the saved GPT-2 tokeniz
 
 The timed markers use JSON-safe ASCII so the runtime and static baselines consume identical
 token bytes. Separate correctness tests cover JSON escapes, including escapes split across tokens.
+The harness also checks both implementations against an independent reference accepting exactly
+the non-empty candidates with one overlapping source occurrence. Pairwise agreement is supporting
+evidence rather than the correctness oracle because two implementations could share a bug.
 
 The runtime matcher builds a suffix automaton directly from file bytes. It permits a token
 while the extended prefix occurs at least once and permits EOS only when the non-empty
@@ -212,6 +215,13 @@ compiles an equivalent `Grammar.from_substring(..., unique=True)` on every itera
 compilation is limited to 10 KiB because embedding larger transient files in compiled grammar
 state is the scaling issue under test. Post-hoc search is recorded for context but cannot
 prevent an invalid tool call and is not an equivalent baseline.
+
+Retained native memory is measured immediately after setup through each constraint object's
+`memory_size_bytes`. Peak process RSS is measured in separate fresh processes so temporary static
+compiler allocations are visible. RSS is sampled every 0.5 ms during setup. The result records
+both absolute peak RSS and its growth over RSS immediately before setup; retained native memory is
+the cleaner comparison because Python and tokenizer allocations dominate process RSS and native
+allocators can reuse already-resident pages.
 
 EOS represents the harness decision to close `old_str`. The prototype exposes the runtime
 constraint as a dedicated matcher; it does not yet splice that matcher into an arbitrary

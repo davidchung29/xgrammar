@@ -1,6 +1,7 @@
 """Profile runtime-bound unique substrings for coding-agent search-and-replace calls."""
 
 import argparse
+import itertools
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import random
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 from profile_ablations import ROOT, cmd, describe, environment, sha, snap, utc, write_json
@@ -15,6 +17,7 @@ from profile_ablations import ROOT, cmd, describe, environment, sha, snap, utc, 
 SIZES = [10 * 1024, 100 * 1024, 1024 * 1024]
 CORPORA = ["unique-heavy", "repetitive"]
 VARIANTS = ["runtime-cold", "runtime-warm", "static-compiled", "posthoc"]
+MEMORY_VARIANTS = ["runtime-cold", "static-compiled"]
 
 
 def overlapping_count(source: bytes, candidate: bytes) -> int:
@@ -220,6 +223,161 @@ def posthoc_replay(source, target):
     return {"validation_wall_ns": validation_ns, "occurrences": count, "tokens": 0}
 
 
+def correctness_equivalence(output):
+    """Check both implementations against an independent overlapping-count oracle."""
+    import xgrammar as xgr
+    from xgrammar.testing import _is_grammar_accept_string
+
+    cases = ["banana", "aaaa", "abcabx"]
+    records = []
+    for source_text in cases:
+        source = source_text.encode()
+        alphabet = sorted(set(source_text) | {"x"})
+        info = xgr.TokenizerInfo(
+            [char.encode() for char in alphabet] + [b"<eos>"],
+            stop_token_ids=[len(alphabet)],
+        )
+        runtime = xgr.UniqueSubstringMatcher(source, info)
+        static = xgr.Grammar.from_substring(source, unique=True)
+        checked = 0
+        for length in range(len(source_text) + 2):
+            for chars in itertools.product(alphabet, repeat=length):
+                candidate = "".join(chars)
+                expected = bool(candidate) and overlapping_count(source, candidate.encode()) == 1
+                runtime.reset()
+                consumed = runtime.accept_string(candidate.encode()) if candidate else True
+                runtime_actual = bool(candidate) and consumed and runtime.is_completed
+                static_actual = _is_grammar_accept_string(static, candidate)
+                assert runtime_actual == expected, (source_text, candidate, "runtime")
+                assert static_actual == expected, (source_text, candidate, "static")
+                checked += 1
+        records.append({"source": source_text, "candidates": checked, "mismatches": 0})
+    result = {
+        "passed": True,
+        "oracle": "candidate is non-empty and has exactly one overlapping occurrence",
+        "total_candidates": sum(record["candidates"] for record in records),
+        "cases": records,
+        "scope": "Completed ASCII candidates; JSON escape behavior is covered by unit tests.",
+    }
+    write_json(output / "correctness_equivalence.json", result)
+    return result
+
+
+def memory_worker(args):
+    """Measure one setup in a fresh process so temporary allocations contribute to peak RSS."""
+    import psutil
+    import xgrammar as xgr
+    from transformers import AutoTokenizer
+
+    workloads = json.loads((args.output / "workloads.json").read_text())
+    workload = next(item for item in workloads if item["name"] == args.memory_workload)
+    source = (args.output / workload["source_file"]).read_bytes()
+    tokenizer = AutoTokenizer.from_pretrained(args.output / "tokenizer", local_files_only=True)
+    info = xgr.TokenizerInfo.from_huggingface(tokenizer)
+    process = psutil.Process()
+    baseline_rss = process.memory_info().rss
+    peak_rss = [baseline_rss]
+    stop_sampling = threading.Event()
+
+    def sample_rss():
+        while not stop_sampling.wait(0.0005):
+            peak_rss[0] = max(peak_rss[0], process.memory_info().rss)
+
+    sampler = threading.Thread(target=sample_rss)
+    sampler.start()
+    try:
+        if args.memory_variant == "runtime-cold":
+            result = xgr.UniqueSubstringMatcher(source, info)
+            retained = result.memory_size_bytes
+        else:
+            grammar = xgr.Grammar.from_substring(source, unique=True)
+            compiler = xgr.GrammarCompiler(info, cache_enabled=False, max_threads=1)
+            result = compiler.compile_grammar(grammar)
+            retained = result.memory_size_bytes
+    finally:
+        stop_sampling.set()
+        sampler.join()
+    final_rss = process.memory_info().rss
+    peak_rss[0] = max(peak_rss[0], final_rss)
+    write_json(
+        args.memory_output,
+        {
+            "workload": workload["name"],
+            "variant": args.memory_variant,
+            "source_bytes": len(source),
+            "retained_constraint_bytes": retained,
+            "baseline_process_rss_bytes": baseline_rss,
+            "final_process_rss_bytes": final_rss,
+            "peak_process_rss_bytes": peak_rss[0],
+            "peak_setup_growth_bytes": max(0, peak_rss[0] - baseline_rss),
+            "status": "ok",
+        },
+    )
+
+
+def run_memory_profiles(args):
+    directory = args.output / "memory"
+    directory.mkdir()
+    workloads = json.loads((args.output / "workloads.json").read_text())
+    workloads = [item for item in workloads if item["source_bytes"] <= args.static_max_bytes]
+    rows = []
+    for run in range(args.memory_runs):
+        for workload in workloads:
+            for variant in MEMORY_VARIANTS:
+                path = directory / f"{workload['name']}-{variant}-{run}.json"
+                env = dict(
+                    os.environ,
+                    PYTHONPATH=str(ROOT / "python"),
+                    TOKENIZERS_PARALLELISM="false",
+                    OMP_NUM_THREADS="1",
+                    MKL_NUM_THREADS="1",
+                )
+                subprocess.run(
+                    [
+                        sys.executable,
+                        str(Path(__file__).resolve()),
+                        "--memory-worker",
+                        "--output",
+                        str(args.output),
+                        "--memory-variant",
+                        variant,
+                        "--memory-workload",
+                        workload["name"],
+                        "--memory-output",
+                        str(path),
+                    ],
+                    env=env,
+                    check=True,
+                )
+                rows.append(json.loads(path.read_text()))
+    summary = []
+    for workload in workloads:
+        for variant in MEMORY_VARIANTS:
+            subset = [
+                row
+                for row in rows
+                if row["workload"] == workload["name"] and row["variant"] == variant
+            ]
+            summary.append(
+                {
+                    "workload": workload["name"],
+                    "variant": variant,
+                    "samples": len(subset),
+                    "retained_mib": describe(
+                        [row["retained_constraint_bytes"] / 2**20 for row in subset]
+                    ),
+                    "peak_process_rss_mib": describe(
+                        [row["peak_process_rss_bytes"] / 2**20 for row in subset]
+                    ),
+                    "peak_setup_growth_mib": describe(
+                        [row["peak_setup_growth_bytes"] / 2**20 for row in subset]
+                    ),
+                }
+            )
+    write_json(args.output / "memory_summary.json", summary)
+    return summary
+
+
 def worker(args):
     import psutil
     import torch
@@ -415,6 +573,35 @@ def summarize(args):
         "Raw setup, per-token mask, acceptance, memory, process telemetry, inputs, hashes, and "
         "correctness samples are stored with the results.",
     ]
+    memory = json.loads((args.output / "memory_summary.json").read_text())
+    lines += [
+        "",
+        "## Memory",
+        "",
+        "Retained memory is reported immediately after setup. Peak RSS is measured in a fresh "
+        "process and includes the Python runtime, XGrammar, and tokenizer; peak setup growth is "
+        "the increase over RSS immediately before setup.",
+        "",
+        "| Workload | Variant | Retained MiB | Peak process RSS MiB | Peak setup growth MiB |",
+        "|---|---|---:|---:|---:|",
+    ]
+    for item in memory:
+        lines.append(
+            f"| {item['workload']} | {item['variant']} | "
+            f"{item['retained_mib']['median']:.3f} | "
+            f"{item['peak_process_rss_mib']['median']:.3f} | "
+            f"{item['peak_setup_growth_mib']['median']:.3f} |"
+        )
+    correctness = json.loads((args.output / "correctness_equivalence.json").read_text())
+    lines += [
+        "",
+        "## Correctness equivalence",
+        "",
+        f"Both implementations matched an independent overlapping-occurrence oracle for "
+        f"{correctness['total_candidates']} completed candidates with zero mismatches. "
+        "Raw GPT-2 masks are not required to be identical for incomplete JSON escapes; dedicated "
+        "unit tests cover escape sequences split across tokens.",
+    ]
     (args.output / "RESULTS.md").write_text("\n".join(lines) + "\n")
     metadata = json.loads((args.output / "metadata.json").read_text())
     metadata.update(status="complete", finished_utc=utc())
@@ -430,18 +617,29 @@ def main():
     parser.add_argument("--iterations", type=int, default=50)
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--static-max-bytes", type=int, default=10 * 1024)
+    parser.add_argument("--memory-runs", type=int, default=5)
     parser.add_argument("--seed", type=int, default=20260924)
     parser.add_argument("--worker", action="store_true")
+    parser.add_argument("--memory-worker", action="store_true")
     parser.add_argument("--variant", choices=VARIANTS)
     parser.add_argument("--round", type=int, default=0)
+    parser.add_argument("--memory-variant", choices=MEMORY_VARIANTS)
+    parser.add_argument("--memory-workload")
+    parser.add_argument("--memory-output", type=Path)
     args = parser.parse_args()
     args.output = args.output.resolve()
     args.tokenizer = args.tokenizer.resolve()
-    assert min(args.warmups, args.iterations, args.rounds, args.static_max_bytes) > 0
+    assert min(
+        args.warmups, args.iterations, args.rounds, args.static_max_bytes, args.memory_runs
+    ) > 0
+    if args.memory_worker:
+        memory_worker(args)
+        return
     if args.worker:
         worker(args)
         return
     prepare(args)
+    correctness_equivalence(args.output)
     for round_index in range(args.rounds):
         order = VARIANTS if round_index % 2 == 0 else list(reversed(VARIANTS))
         for variant in order:
@@ -479,6 +677,7 @@ def main():
                 env=env,
                 check=True,
             )
+    run_memory_profiles(args)
     summarize(args)
 
 
